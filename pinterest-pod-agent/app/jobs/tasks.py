@@ -180,9 +180,17 @@ async def _regenerate_content(
     """
     from app.config import get_settings
 
+    SENTINEL = "pending_auto_generation"
+    has_existing = (
+        job.title
+        and job.description
+        and job.title != SENTINEL
+        and job.description != SENTINEL
+    )
+
     settings = get_settings()
     if not settings.volc_api_key:
-        if job.title and job.description:
+        if has_existing:
             logger.info(
                 "VOLC_API_KEY not configured — keeping existing content for job=%s",
                 job.job_id,
@@ -220,7 +228,7 @@ async def _regenerate_content(
                     "LLM content generation failed for job=%s, falling back to existing: %s",
                     job.job_id, exc,
                 )
-                if job.title and job.description:
+                if has_existing:
                     return
                 raise FatalError(
                     f"LLM content generation failed and job {job.job_id} has no existing content"
@@ -235,7 +243,7 @@ async def _regenerate_content(
                     "LLM returned empty content for job=%s, falling back to existing",
                     job.job_id,
                 )
-                if job.title and job.description:
+                if has_existing:
                     return
                 raise FatalError(
                     f"LLM returned empty content and job {job.job_id} has no existing content"
@@ -293,7 +301,7 @@ async def _regenerate_content(
         "Content dedup failed after all retries for job=%s, keeping existing",
         job.job_id,
     )
-    if not job.title or not job.description:
+    if not has_existing:
         raise FatalError(
             f"Content dedup exhausted and job {job.job_id} has no existing content"
         )

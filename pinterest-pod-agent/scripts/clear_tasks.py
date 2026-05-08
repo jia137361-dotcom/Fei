@@ -26,4 +26,4 @@ with e.connect() as c:
     jobs = c.execute(text("SELECT COUNT(*) FROM publish_job")).scalar()
     print(f"After: {tasks} tasks, {jobs} jobs")
 
-print("✅ All task residues cleared.")
+print("All task residues cleared.")
