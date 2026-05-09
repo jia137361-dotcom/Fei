@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 logger = logging.getLogger(__name__)
 
 from app.automation.browser_factory import BrowserSession, open_adspower_profile
-from app.automation.pinterest_flow import PinDraft, PublishResult
+from app.automation.pinterest_flow import PinterestFlow, PinDraft, PublishResult
 from app.evomap.prompt_evolve import PromptContext, PromptEvolver
 from app.models.pin_performance import PinPerformance
 from app.models.social_account import SocialAccount

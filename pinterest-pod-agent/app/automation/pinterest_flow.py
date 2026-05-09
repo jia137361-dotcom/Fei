@@ -344,6 +344,8 @@ class PinterestFlow:
     async def _is_title_input_enabled(self) -> bool:
         """Check that any title input is visible (Pinterest post-upload readiness signal)."""
         _TITLE_SELECTORS = [
+            "#storyboard-selector-title",
+            "[data-test-id='storyboard-title-field-container'] input",
             "input[placeholder='Add a title']",
             "input[placeholder*='Add a title' i]",
             "[aria-label='Title'] input",
@@ -455,12 +457,37 @@ class PinterestFlow:
         success_signal = await self._detect_publish_success_signal()
         if success_signal and not pin_url:
             pin_url = await self._click_see_it_now_and_extract_url()
+        # Pinterest new UI often stays on creator page after publish.  If the
+        # publish button is gone, the Pin was published even without a toast.
+        if not pin_url and not success_signal:
+            if await self._is_publish_button_gone():
+                return {
+                    "success_signal": True, "success_source": "publish_button_gone",
+                    "pin_url": None, "final_url": self.page.url,
+                }
         return {
             "success_signal": bool(pin_url or success_signal),
             "success_source": "pin_url" if pin_url else success_signal,
             "pin_url": pin_url,
             "final_url": self.page.url,
         }
+
+    async def _is_publish_button_gone(self) -> bool:
+        """Return True when the publish button is no longer visible on the
+        creator page (strong signal the Pin was just published)."""
+        pub_selectors = [
+            "button:has-text('Publish')",
+            "button:has-text('Save')",
+            "div[role='button']:has-text('Publish')",
+        ]
+        for sel in pub_selectors:
+            try:
+                btn = self.page.locator(sel).first
+                if await btn.count() > 0 and await btn.is_visible():
+                    return False
+            except Exception:
+                continue
+        return True
 
     async def _ai_handle_interruptions(self, *, stage: str, objective: str) -> None:
         controls = await self.ui_decision_agent.collect_controls(self.page)
@@ -606,6 +633,8 @@ class PinterestFlow:
             logger.warning("Title truncated from %d to 100 chars", len(title))
             title = title[:100].strip()
         selectors = [
+            "#storyboard-selector-title",
+            "[data-test-id='storyboard-title-field-container'] input",
             "input[placeholder='Add a title']",
             "input[placeholder*='Add a title' i]",
             "[aria-label='Title'] input",
@@ -1283,6 +1312,8 @@ class PinterestFlow:
             raise RuntimeError("Refusing to publish: draft description is empty")
         title_value = await self._read_first_safe_value(
             [
+                "#storyboard-selector-title",
+                "[data-test-id='storyboard-title-field-container'] input",
                 "input[placeholder='Add a title']",
                 "input[placeholder*='Add a title' i]",
                 "[aria-label='Title'] input",
