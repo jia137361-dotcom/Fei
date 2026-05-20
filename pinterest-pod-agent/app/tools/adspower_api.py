@@ -46,6 +46,15 @@ class AdsPowerClient:
         self.timeout_seconds = timeout_seconds if timeout_seconds is not None else settings.adspower_timeout_seconds
         self.cache_dir = Path("var/adspower")
 
+    def list_profiles(self, *, page: int = 1, page_size: int = 5) -> list[dict[str, Any]]:
+        """List AdsPower profiles (public health-check helper)."""
+        payload = self._get(
+            "/api/v1/user/list",
+            params={"page": page, "page_size": page_size},
+        )
+        data = payload.get("data") or {}
+        return data.get("list") or []
+
     def get_profile(self, profile_id: str) -> dict[str, Any]:
         return self._get("/api/v1/user/list", params={"user_id": profile_id})
 

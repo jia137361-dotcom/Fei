@@ -13,10 +13,12 @@ from __future__ import annotations
 import logging
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from app.config import get_settings
 from app.models.account_policy import AccountPolicy
 from app.models.scheduled_task import ScheduledTask
 
@@ -231,7 +233,9 @@ def _within_time_window(policy: AccountPolicy | None, now: datetime) -> bool:
     if not policy.allowed_timezone_start or not policy.allowed_timezone_end:
         return True
 
-    current_time = now.strftime("%H:%M")
+    settings = get_settings()
+    local_now = now.astimezone(ZoneInfo(settings.scheduler_timezone))
+    current_time = local_now.strftime("%H:%M")
     start = policy.allowed_timezone_start
     end = policy.allowed_timezone_end
 
@@ -244,13 +248,16 @@ def _within_time_window(policy: AccountPolicy | None, now: datetime) -> bool:
 
 def _count_posts_today(db: Session, account_id: str, now: datetime) -> int:
     """Count posts published by this account today from scheduled_task."""
-    today = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    tz = ZoneInfo(get_settings().scheduler_timezone)
+    local_now = now.astimezone(tz)
+    today = local_now.replace(hour=0, minute=0, second=0, microsecond=0)
+    today_utc = today.astimezone(UTC)
     return db.scalar(
         select(func.count(ScheduledTask.id)).where(
             ScheduledTask.account_id == account_id,
             ScheduledTask.task_type.in_(["publish", "warmup_and_publish"]),
             ScheduledTask.status.in_(["completed", "published"]),
-            ScheduledTask.finished_at >= today,
+            ScheduledTask.finished_at >= today_utc,
         )
     ) or 0
 

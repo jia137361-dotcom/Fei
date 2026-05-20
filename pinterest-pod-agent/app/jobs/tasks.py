@@ -527,10 +527,10 @@ def _handle_task_exception(
     """Route exception to the correct writeback: fatal → failed, retryable → retry."""
     if isinstance(exc, RetryableTaskError):
         _check_final_retry_and_writeback(st_id, error_message=str(exc), error_type="retryable")
-        raise
+        raise exc
     if isinstance(exc, FatalError):
         _st_writeback(st_id, "failed", error_message=str(exc), error_type="fatal")
-        raise
+        raise exc
     error_type = classify_exception(exc)
     if error_type == "fatal":
         _st_writeback(st_id, "failed", error_message=str(exc), error_type="fatal")
@@ -632,9 +632,9 @@ def publish_job_task(
         db.commit()
 
         if dry_run:
-            job.status = "dry_run_done"
+            job.status = "completed"
             db.commit()
-            result = {"job_id": job_id, "status": job.status, "dry_run": True}
+            result = {"job_id": job_id, "status": "completed", "dry_run": True}
             _st_writeback(st_id, "completed", result_json=result)
             return result
 
@@ -675,7 +675,8 @@ def publish_job_task(
             job.error_message = None if result["status"] == "published" else job.error_message
             job.finished_at = datetime.now(UTC)
             db.commit()
-        _st_writeback(st_id, job.status, result_json=result)
+        final_status = "completed" if result.get("status") == "published" else "failed"
+        _st_writeback(st_id, final_status, result_json=result)
         return result
     except Exception as exc:
         error_type = classify_exception(exc)
@@ -692,9 +693,9 @@ def publish_job_task(
                 error_type="fatal",
             )
             raise FatalError(str(exc)) from exc
-        # mark scheduled_task as failed; Celery may retry once (max_retries=1)
-        _st_writeback(
-            st_id, "failed",
+        # retryable: let Celery retry; only mark failed after retries exhausted
+        _check_final_retry_and_writeback(
+            st_id,
             error_message=str(exc),
             error_type=error_type,
         )
@@ -1224,30 +1225,58 @@ def reclaim_stale_tasks_task(
 
         reclaimed = 0
         for st in stale_running + never_heartbeated + stuck_ready:
+            hard_limit = max(st.max_attempts * 3, 9)  # per-task reclaim cap
             old_status = st.status
+            st.attempt_count = st.attempt_count + 1
+            if st.attempt_count >= hard_limit:
+                st.status = "failed"
+                st.finished_at = now
+                st.locked_by = None
+                st.lock_until = None
+                st.celery_task_id = None
+                st.error_message = (
+                    f"Task exceeded reclaim limit after {st.attempt_count} attempts "
+                    f"(was {old_status}, stale for >{stale_minutes}min)"
+                )
+                st.error_type = "reclaim_exhausted"
+                logger.error(
+                    "Reclaim exhausted task_id=%s type=%s account=%s attempts=%d",
+                    st.task_id, st.task_type, st.account_id, st.attempt_count,
+                )
+                # Also fail the linked publish_job
+                job_id = (st.payload_json or {}).get("job_id")
+                if job_id and st.task_type in ("publish", "warmup_and_publish"):
+                    job = db.scalar(
+                        select(PublishJob).where(PublishJob.job_id == job_id)
+                    )
+                    if job and job.status == "running":
+                        job.status = "failed"
+                        job.error_message = (
+                            f"Task exhausted reclaims after {st.attempt_count} attempts"
+                        )
+                continue
+
             st.status = "pending"
             st.locked_by = None
             st.lock_until = None
             st.celery_task_id = None
-            st.attempt_count = 0
             st.next_retry_at = now + timedelta(minutes=5)
             st.error_message = (
-                f"Stale task reclaimed after {stale_minutes}min (was {old_status})"
+                f"Stale task reclaimed after {stale_minutes}min (was {old_status}, attempt {st.attempt_count})"
             )
             reclaimed += 1
             logger.warning(
-                "Reclaimed stuck task_id=%s type=%s account=%s (was status=%s)",
+                "Reclaimed stuck task_id=%s type=%s account=%s (was status=%s, attempt=%d)",
                 st.task_id,
                 st.task_type,
                 st.account_id,
                 old_status,
+                st.attempt_count,
             )
 
             # Also unstick publish_job if this task owned one
             job_id = (st.payload_json or {}).get("job_id")
             if job_id and st.task_type in ("publish", "warmup_and_publish"):
-                from app.models.publish_job import PublishJob
-
                 job = db.scalar(
                     select(PublishJob).where(PublishJob.job_id == job_id)
                 )

@@ -423,12 +423,19 @@ def publish_pin_direct(
     account_id: str,
     job_id: str,
     dry_run: bool = True,
+    warmup_duration_minutes: int = 0,
+    bypass_scheduler: bool = False,
 ) -> dict[str, Any]:
     """Publish a Pin immediately via warmup_and_publish.
 
     Defaults to dry_run=True for safety. Set dry_run=False for production.
+    By default, creates a trackable scheduled_task so get_task_status works.
+    Pass bypass_scheduler=True for the old direct-dispatch behavior.
     """
+    from uuid import uuid4
+
     from app.models.publish_job import PublishJob
+    from app.models.scheduled_task import ScheduledTask
     from app.models.social_account import SocialAccount
 
     db = _db()
@@ -450,24 +457,64 @@ def publish_pin_direct(
             return {"error": f"Publish job not found: {job_id}"}
         if job.status in ("cancelled", "published", "failed"):
             return {"error": f"Publish job already finalized: {job_id} (status={job.status})"}
+
+        if bypass_scheduler:
+            db.close()
+            from app.jobs.tasks import warmup_and_publish_task
+
+            result = warmup_and_publish_task.delay(
+                account_id=account_id,
+                job_id=job_id,
+                warmup_duration_minutes=warmup_duration_minutes,
+                dry_run=dry_run,
+            )
+            return {
+                "celery_task_id": result.id,
+                "scheduled_task_id": None,
+                "job_id": job_id,
+                "account_id": account_id,
+                "dry_run": dry_run,
+                "bypass_scheduler": True,
+                "note": "Task dispatched without scheduled_task tracking. Use Celery task_id to monitor.",
+            }
+
+        # Normal path: create a scheduled_task record for full tracking
+        now = _now()
+        task = ScheduledTask(
+            task_id=f"st_{uuid4().hex[:16]}",
+            task_type="warmup_and_publish",
+            account_id=account_id,
+            status="pending",
+            priority=8,  # direct publish gets higher priority
+            scheduled_at=now,
+            payload_json={
+                "account_id": account_id,
+                "job_id": job_id,
+                "warmup_duration_minutes": warmup_duration_minutes,
+                "dry_run": dry_run,
+            },
+        )
+        db.add(task)
+        db.commit()
+        db.refresh(task)
+        saved_task_id = task.task_id
+
+        # Dispatch immediately
+        from app.jobs.dispatcher import dispatch_ready_tasks
+
+        dispatch_result = dispatch_ready_tasks(db, limit=1, dry_run=dry_run)
+        db.commit()
+
+        return {
+            "scheduled_task_id": saved_task_id,
+            "job_id": job_id,
+            "account_id": account_id,
+            "dry_run": dry_run,
+            "dispatched": dispatch_result.get("dispatched", 0),
+            "note": "Use get_task_status with scheduled_task_id to track progress",
+        }
     finally:
         db.close()
-
-    from app.jobs.tasks import warmup_and_publish_task
-
-    result = warmup_and_publish_task.delay(
-        account_id=account_id,
-        job_id=job_id,
-        warmup_duration_minutes=0,
-        dry_run=dry_run,
-    )
-    return {
-        "celery_task_id": result.id,
-        "job_id": job_id,
-        "account_id": account_id,
-        "dry_run": dry_run,
-        "note": "Check task status with get_task_status",
-    }
 
 
 # ---------------------------------------------------------------------------
@@ -681,12 +728,22 @@ def check_health() -> dict[str, Any]:
     try:
         from app.tools.adspower_api import AdsPowerClient
 
-        client = AdsPowerClient(timeout_seconds=3.0)
-        client._get("/status")  # type: ignore[attr-defined]
-        health["checks"]["adspower"] = {"ok": True}
+        client = AdsPowerClient(timeout_seconds=5.0)
+        profiles = client.list_profiles()
+        health["checks"]["adspower"] = {
+            "ok": True,
+            "profile_count": len(profiles),
+        }
     except Exception as exc:
         health["status"] = "degraded"
-        health["checks"]["adspower"] = {"ok": False, "error": str(exc)}
+        msg = str(exc)
+        if "401" in msg or "403" in msg:
+            detail = "AdsPower API key rejected"
+        elif "Connection" in msg or "connect" in msg.lower():
+            detail = "AdsPower not running or unreachable"
+        else:
+            detail = msg[:200]
+        health["checks"]["adspower"] = {"ok": False, "error": detail}
 
     return health
 

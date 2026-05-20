@@ -93,7 +93,7 @@ async def run_pin_publish_with_adspower(
             await session.close()
 
 
-def _draft_from_input(workflow_input: PublishWorkflowInput | AccountPublishWorkflowInput) -> PinDraft:
+def _draft_from_input(workflow_input: AccountPublishWorkflowInput) -> PinDraft:
     return PinDraft(
         title=workflow_input.title,
         description=workflow_input.description,
@@ -107,7 +107,7 @@ def record_publish(
     *,
     db: Session,
     evolver: PromptEvolver,
-    workflow_input: PublishWorkflowInput | AccountPublishWorkflowInput,
+    workflow_input: AccountPublishWorkflowInput,
     result: PublishResult,
     content_prompt: str,
     content_batch_id: str | None = None,

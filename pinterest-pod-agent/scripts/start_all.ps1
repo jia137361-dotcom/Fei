@@ -51,7 +51,7 @@ Start-Process -FilePath "$VenvRoot\Scripts\python.exe" `
 # -- Celery Worker --------------------------------------------
 Write-Host "[2/3] Starting Celery Worker..." -ForegroundColor Green
 Start-Process -FilePath "$VenvRoot\Scripts\celery.exe" `
-    -ArgumentList "-A app.celery_app worker -Q publish,media,engagement,trend --loglevel=info --concurrency=2 --pool=solo" `
+    -ArgumentList "-A app.celery_app worker -Q publish,media,engagement,trend --loglevel=info --concurrency=1 --pool=solo" `
     -WorkingDirectory $ProjectRoot `
     -WindowStyle Normal
 
