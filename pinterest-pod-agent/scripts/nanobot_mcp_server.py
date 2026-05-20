@@ -422,13 +422,13 @@ def list_content_templates(
 def publish_pin_direct(
     account_id: str,
     job_id: str,
-    dry_run: bool = True,
+    dry_run: bool = False,
     warmup_duration_minutes: int = 0,
     bypass_scheduler: bool = False,
 ) -> dict[str, Any]:
     """Publish a Pin immediately via warmup_and_publish.
 
-    Defaults to dry_run=True for safety. Set dry_run=False for production.
+    Set dry_run=True for safe preview. Defaults to dry_run=False (production).
     By default, creates a trackable scheduled_task so get_task_status works.
     Pass bypass_scheduler=True for the old direct-dispatch behavior.
     """
